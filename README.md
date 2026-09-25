@@ -8,10 +8,10 @@
 
 | Field | Value |
 |---|---|
-| **Team Name** | [Your Team Name] |
+| **Team Name** | TriByte |
 | **Track** | [AI / DevOps / Sustainability / Open] |
-| **Team Lead** | [Name] — [email@ibm.com] |
-| **Members** | [Name 1], [Name 2], [Name 3] |
+| **Team Lead** | Priyal Jain — jainpriyal048@gmail.com |
+| **Members** | Priyal Jain, Aakriti Ghimire, Khushi Ganatra |
 
 ---
 
