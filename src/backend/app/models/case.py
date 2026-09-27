@@ -14,3 +14,6 @@ class CaseAnalysis(BaseModel):
     case_id: str
     entities: List[Entity]
     relationships: List[Relationship]
+    patterns: List[Dict[str, Any]] = []
+    graph: Dict[str, Any] = {}
+    report: Dict[str, Any] = {}

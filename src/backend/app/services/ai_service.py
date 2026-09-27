@@ -1,12 +1,15 @@
+import json
+import logging
 import os
 import re
 import uuid
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 from app.models.case import CaseAnalysis
 from app.models.entities import Entity
 from app.models.relationships import Relationship
 
+logger = logging.getLogger(__name__)
 
 # ============================================================
 # Configuration
@@ -14,10 +17,38 @@ from app.models.relationships import Relationship
 
 USE_LLM = os.getenv("USE_LLM", "false").lower() == "true"
 
+WATSONX_API_KEY = os.getenv("WATSONX_API_KEY", "")
+WATSONX_PROJECT_ID = os.getenv("WATSONX_PROJECT_ID", "")
+WATSONX_URL = os.getenv(
+    "WATSONX_URL",
+    "https://us-south.ml.cloud.ibm.com",
+)
+WATSONX_MODEL_ID = os.getenv(
+    "WATSONX_MODEL_ID",
+    "ibm/granite-13b-instruct-v2",
+)
 
 # ============================================================
 # Utility functions
 # ============================================================
+
+VALID_ENTITY_TYPES = {
+    "PERSON",
+    "VICTIM",
+    "PHONE",
+    "DEVICE",
+    "BANK_ACCOUNT",
+    "UPI_ID",
+    "TRANSACTION",
+}
+
+VALID_RELATIONSHIP_TYPES = {
+    "USES",
+    "BELONGS_TO",
+    "TRANSFERRED_TO",
+    "ASSOCIATED_WITH",
+}
+
 
 def _generate_case_id() -> str:
     """Generate a short unique case ID."""
@@ -44,7 +75,7 @@ def _extract_entities_mock(text: str) -> List[Entity]:
 
     This is only a fallback for development/demo purposes.
     The main intelligence extraction will eventually use
-    IBM/Bob.
+    IBM watsonx.ai.
     """
 
     entities: List[Entity] = []
@@ -122,8 +153,6 @@ def _extract_entities_mock(text: str) -> List[Entity]:
 
     account_pattern = (
         r"\b(?:ACC|ACCOUNT)[-_ ]?[A-Z0-9]{4,20}\b"
-        # r"\b(?:ACC|ACCOUNT)[-_ ]?"
-        # r"[A-Z0-9]*\d[A-Z0-9]{3,19}\b"
     )
 
     for match in re.findall(
@@ -145,8 +174,6 @@ def _extract_entities_mock(text: str) -> List[Entity]:
 
     device_pattern = (
         r"\b(?:DEV|DEVICE)[-_ ]?[A-Za-z0-9]{3,30}\b"
-        # r"\b(?:DEV|DEVICE)[-_ ]?"
-        # r"[A-Z0-9]*\d[A-Z0-9]{2,29}\b"
     )
 
     for match in re.findall(
@@ -218,6 +245,7 @@ def _extract_entities_mock(text: str) -> List[Entity]:
     for match in re.findall(
         victim_pattern,
         text,
+        re.IGNORECASE,
     ):
 
         add_entity(
@@ -548,7 +576,7 @@ def _extract_relationships(
 
 
 # ============================================================
-# Mock analysis
+# Mock analysis (deterministic fallback)
 # ============================================================
 
 def _mock_analysis(text: str) -> CaseAnalysis:
@@ -565,6 +593,283 @@ def _mock_analysis(text: str) -> CaseAnalysis:
         entities=entities,
         relationships=relationships,
     )
+
+
+# ============================================================
+# IBM watsonx.ai adapter
+# ============================================================
+
+class WatsonxUnavailableError(Exception):
+    """Raised when the watsonx.ai API cannot be reached."""
+
+
+class WatsonxAdapter:
+    """
+    Thin wrapper around ibm_watsonx_ai ModelInference.
+
+    Instantiated lazily once when USE_LLM=true and credentials
+    are present.  All HTTP / SDK errors are re-raised as
+    WatsonxUnavailableError so callers can fall back cleanly.
+    """
+
+    def __init__(self) -> None:
+        try:
+            from ibm_watsonx_ai import Credentials
+            from ibm_watsonx_ai.foundation_models import ModelInference
+
+            credentials = Credentials(
+                url=WATSONX_URL,
+                api_key=WATSONX_API_KEY,
+            )
+
+            self._model = ModelInference(
+                model_id=WATSONX_MODEL_ID,
+                credentials=credentials,
+                project_id=WATSONX_PROJECT_ID,
+            )
+
+        except Exception as exc:
+            raise WatsonxUnavailableError(
+                f"Could not initialise watsonx adapter: {exc}"
+            ) from exc
+
+    def complete(self, prompt: str) -> str:
+        """
+        Send *prompt* to the model and return the generated text.
+
+        Raises
+        ------
+        WatsonxUnavailableError
+            On any network or SDK error.
+        """
+        try:
+            response = self._model.generate_text(
+                prompt=prompt,
+                params={
+                    "max_new_tokens": 1024,
+                    "temperature": 0.0,
+                    "repetition_penalty": 1.05,
+                },
+            )
+            return response  # ModelInference.generate_text returns str
+
+        except Exception as exc:
+            raise WatsonxUnavailableError(
+                f"watsonx generate_text failed: {exc}"
+            ) from exc
+
+
+# Module-level lazy singleton — created at most once per process
+_adapter: Optional[WatsonxAdapter] = None
+
+
+def _get_adapter() -> WatsonxAdapter:
+    global _adapter
+    if _adapter is None:
+        _adapter = WatsonxAdapter()
+    return _adapter
+
+
+# ============================================================
+# Prompt builder
+# ============================================================
+
+_SYSTEM_MESSAGE = """You are a cyber-fraud intelligence extraction engine.
+Given an unstructured case description, extract all entities and relationships
+and return ONLY a single valid JSON object — no prose, no markdown fences.
+
+## Entity types
+PERSON, VICTIM, PHONE, DEVICE, BANK_ACCOUNT, UPI_ID, TRANSACTION
+
+## Relationship types
+USES, BELONGS_TO, TRANSFERRED_TO, ASSOCIATED_WITH
+
+## Rules
+1. Every entity must have: id (E001, E002 …), name, type, metadata (object, may be empty).
+2. Every relationship must have: source (entity id), target (entity id), type.
+   Optional fields: amount (float, INR), timestamp (ISO-8601 or DD/MM/YYYY).
+3. Resolve pronouns: replace "He"/"She"/"They" with the unambiguous antecedent's name.
+4. Deduplicate: same name (case-insensitive) + same type → use one entity with one id.
+5. Drop relationships whose source or target id does not appear in the entities list.
+6. Ignore unknown entity and relationship types.
+
+## Example input
+Accused Rahul uses phone 9876543210. He uses device DEV99. Victim Priya transferred Rs 5000 to ACC001 on 2026-01-15.
+
+## Example output
+{
+  "entities": [
+    {"id": "E001", "name": "Rahul", "type": "PERSON", "metadata": {}},
+    {"id": "E002", "name": "9876543210", "type": "PHONE", "metadata": {"country": "IN"}},
+    {"id": "E003", "name": "DEV99", "type": "DEVICE", "metadata": {}},
+    {"id": "E004", "name": "Priya", "type": "VICTIM", "metadata": {"role": "victim"}},
+    {"id": "E005", "name": "ACC001", "type": "BANK_ACCOUNT", "metadata": {}}
+  ],
+  "relationships": [
+    {"source": "E001", "target": "E002", "type": "USES"},
+    {"source": "E001", "target": "E003", "type": "USES"},
+    {"source": "E004", "target": "E005", "type": "TRANSFERRED_TO", "amount": 5000.0, "timestamp": "2026-01-15"}
+  ]
+}
+"""
+
+
+def _build_prompt(text: str) -> str:
+    return (
+        f"{_SYSTEM_MESSAGE}\n"
+        f"## Case text\n{text.strip()}\n\n"
+        f"## Output (JSON only)\n"
+    )
+
+
+# ============================================================
+# LLM response parser
+# ============================================================
+
+def _parse_llm_response(raw: str, fallback_text: str) -> CaseAnalysis:
+    """
+    Parse the raw LLM output string into a CaseAnalysis.
+
+    Falls back to _mock_analysis on any parse / validation error.
+    """
+
+    # Strip markdown code fences if the model added them
+    cleaned = re.sub(
+        r"^```(?:json)?\s*|\s*```$",
+        "",
+        raw.strip(),
+        flags=re.MULTILINE,
+    )
+
+    try:
+        data: Dict[str, Any] = json.loads(cleaned)
+    except json.JSONDecodeError as exc:
+        logger.warning("LLM returned non-JSON (%s) – using fallback", exc)
+        return _mock_analysis(fallback_text)
+
+    # --------------------------------------------------------
+    # Build entities — deduplicate and reassign sequential IDs
+    # --------------------------------------------------------
+
+    raw_entities: List[Dict[str, Any]] = data.get("entities", [])
+    entities: List[Entity] = []
+    # Maps original LLM-assigned id → normalised id
+    id_map: Dict[str, str] = {}
+    seen: set = set()
+
+    for raw_ent in raw_entities:
+        try:
+            etype = str(raw_ent.get("type", "")).upper()
+            if etype not in VALID_ENTITY_TYPES:
+                continue
+
+            name = _clean_name(str(raw_ent.get("name", "")))
+            if not name:
+                continue
+
+            key = (name.lower(), etype)
+            if key in seen:
+                # Map duplicate LLM id to the existing entity id
+                for e in entities:
+                    if (e.name.lower(), e.type) == key:
+                        id_map[str(raw_ent.get("id", ""))] = e.id
+                        break
+                continue
+
+            seen.add(key)
+            new_id = _entity_id(len(entities) + 1)
+            id_map[str(raw_ent.get("id", ""))] = new_id
+
+            entities.append(
+                Entity(
+                    id=new_id,
+                    name=name,
+                    type=etype,
+                    metadata=raw_ent.get("metadata") or {},
+                )
+            )
+
+        except Exception as exc:
+            logger.warning("Skipping malformed entity (%s): %s", exc, raw_ent)
+
+    # --------------------------------------------------------
+    # Build relationships — drop any with dangling IDs
+    # --------------------------------------------------------
+
+    valid_ids = {e.id for e in entities}
+    raw_rels: List[Dict[str, Any]] = data.get("relationships", [])
+    relationships: List[Relationship] = []
+    seen_rels: set = set()
+
+    for raw_rel in raw_rels:
+        try:
+            rtype = str(raw_rel.get("type", "")).upper()
+            if rtype not in VALID_RELATIONSHIP_TYPES:
+                continue
+
+            src_llm = str(raw_rel.get("source", ""))
+            tgt_llm = str(raw_rel.get("target", ""))
+
+            src_id = id_map.get(src_llm)
+            tgt_id = id_map.get(tgt_llm)
+
+            if src_id not in valid_ids or tgt_id not in valid_ids:
+                continue
+
+            rel_key = (src_id, tgt_id, rtype)
+            if rel_key in seen_rels:
+                continue
+            seen_rels.add(rel_key)
+
+            amount: Optional[float] = None
+            raw_amount = raw_rel.get("amount")
+            if raw_amount is not None:
+                try:
+                    amount = float(raw_amount)
+                except (TypeError, ValueError):
+                    pass
+
+            timestamp: Optional[str] = raw_rel.get("timestamp")
+
+            relationships.append(
+                Relationship(
+                    source=src_id,
+                    target=tgt_id,
+                    type=rtype,
+                    amount=amount,
+                    timestamp=timestamp,
+                )
+            )
+
+        except Exception as exc:
+            logger.warning("Skipping malformed relationship (%s): %s", exc, raw_rel)
+
+    try:
+        return CaseAnalysis(
+            case_id=_generate_case_id(),
+            entities=entities,
+            relationships=relationships,
+        )
+    except Exception as exc:
+        logger.warning("CaseAnalysis validation failed (%s) – using fallback", exc)
+        return _mock_analysis(fallback_text)
+
+
+# ============================================================
+# watsonx orchestrator
+# ============================================================
+
+def _watsonx_analysis(text: str) -> CaseAnalysis:
+    try:
+        prompt = _build_prompt(text)
+        raw = _get_adapter().complete(prompt)
+        return _parse_llm_response(raw, text)
+    except WatsonxUnavailableError:
+        logger.warning("watsonx unavailable – using deterministic fallback")
+        return _mock_analysis(text)
+    except Exception as exc:
+        logger.warning("Unexpected LLM error (%s) – using deterministic fallback", exc)
+        return _mock_analysis(text)
 
 
 # ============================================================
@@ -587,11 +892,14 @@ def analyze_text(text: str) -> CaseAnalysis:
 
     Notes
     -----
-    If LLM integration is enabled, this function can route
-    the request to the IBM/Bob extraction layer.
+    When USE_LLM=true the request is routed to the IBM watsonx.ai
+    extraction layer (ibm/granite-13b-instruct-v2 by default).
+    On any API or parse failure the deterministic fallback is
+    used transparently so the service never returns an error to
+    the caller.
 
-    Currently the deterministic fallback is used so the
-    application remains runnable without external services.
+    When USE_LLM=false (default) the deterministic regex-based
+    extractor is used directly.
     """
 
     if not text or not text.strip():
@@ -599,15 +907,7 @@ def analyze_text(text: str) -> CaseAnalysis:
             "Case intelligence text cannot be empty."
         )
 
-    # --------------------------------------------------------
-    # Current development/demo mode
-    # --------------------------------------------------------
-
     if not USE_LLM:
         return _mock_analysis(text)
 
-    # --------------------------------------------------------
-    # IBM/Bob integration will be added here.
-    # --------------------------------------------------------
-
-    return _mock_analysis(text)
+    return _watsonx_analysis(text)
