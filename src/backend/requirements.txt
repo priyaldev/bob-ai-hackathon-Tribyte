@@ -2,3 +2,6 @@ fastapi
 uvicorn
 pydantic
 python-dotenv
+ibm-watsonx-ai>=1.1.2
+pytest>=8.0
+pytest-mock>=3.14
