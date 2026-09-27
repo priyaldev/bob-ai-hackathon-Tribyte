@@ -1104,44 +1104,70 @@ function App() {
 
     try {
       /*
-       * ------------------------------------------------------
-       * TEMPORARY PROCESSING DELAY
-       * ------------------------------------------------------
-       *
-       * This only makes the demo feel like the
-       * backend/AI is processing the data.
+       * POST the raw text to the FastAPI backend.
+       * The Vite dev proxy forwards /api → localhost:8000.
        */
-
-      await new Promise((resolve) =>
-        setTimeout(resolve, 1200)
+      const response = await fetch(
+        "/api/cases/analyze",
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            text: investigationData.raw_data,
+          }),
+        }
       );
 
-      /*
-       * ------------------------------------------------------
-       * IMPORTANT
-       * ------------------------------------------------------
-       *
-       * Instead of using mockCase here, we now analyze
-       * the RAW DATA submitted by NewInvestigation.jsx.
-       */
+      if (!response.ok) {
+        const errorData = await response
+          .json()
+          .catch(() => ({}));
 
-      const generatedCase =
-        analyzeUploadedInvestigation(
-          investigationData.raw_data,
-          investigationData.case_title,
-          investigationData.context
+        throw new Error(
+          errorData?.detail ||
+            `Server error: ${response.status}`
         );
+      }
+
+      const apiCase = await response.json();
 
       /*
-       * Store the actual generated case.
+       * Merge the backend response with the UI-only fields
+       * (case_title, status, summary, recommendations) so
+       * Investigation.jsx renders correctly.
        */
-      setCurrentCase(
-        generatedCase
-      );
+      const generatedCase = {
+        ...apiCase,
+        case_title:
+          investigationData.case_title ||
+          "Cyber Fraud Investigation",
+        status: (() => {
+          const patterns = apiCase.patterns || [];
+          if (
+            patterns.some(
+              (p) => p.severity === "HIGH"
+            )
+          )
+            return "HIGH RISK";
+          if (patterns.length > 0)
+            return "MEDIUM RISK";
+          return "LOW RISK";
+        })(),
+        summary:
+          investigationData.context?.trim() ||
+          apiCase.report?.summary ||
+          `Case ${apiCase.case_id} — ${
+            (apiCase.entities || []).length
+          } entities, ${
+            (apiCase.relationships || []).length
+          } relationships extracted.`,
+        recommendations:
+          apiCase.report?.recommended_actions || [],
+      };
 
-      /*
-       * Open investigation dashboard.
-       */
+      setCurrentCase(generatedCase);
       setPage("investigation");
     } finally {
       setIsAnalyzing(false);
