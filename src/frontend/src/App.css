@@ -250,6 +250,28 @@
   background: #0a0e16;
 }
 
+.network-graph .react-flow__controls {
+  background: #111927;
+  border: 1px solid #283246;
+  border-radius: 8px;
+  box-shadow: none;
+}
+
+.network-graph .react-flow__controls-button {
+  background: #111927;
+  border-bottom: 1px solid #283246;
+  color: #8994a7;
+  fill: #8994a7;
+}
+
+.network-graph .react-flow__controls-button:hover {
+  background: #1a2333;
+}
+
+.network-graph .react-flow__controls-button svg {
+  fill: #8994a7;
+}
+
 .side-panel {
   display: flex;
   flex-direction: column;
