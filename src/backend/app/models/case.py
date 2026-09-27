@@ -1,4 +1,5 @@
-from typing import List
+from typing import Any, Dict, List
+
 from pydantic import BaseModel
 
 from .entities import Entity

@@ -1,5 +1,6 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from app.api.cases import router as cases_router
 
 app = FastAPI(
     title="Cyber Fraud Network Analyzer",
@@ -19,6 +20,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+app.include_router(cases_router)
 
 @app.get("/")
 def root():
@@ -33,3 +35,4 @@ def health_check():
         "status": "healthy",
         "service": "cyber-fraud-network-analyzer"
     }
+    
