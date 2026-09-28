@@ -100,6 +100,13 @@ def detect_fraud_patterns(
                 relationship.source, []
             ).append(relationship.target)
 
+    def _entity_name(entity_id: str) -> str:
+        entity = next(
+            (e for e in entities if e.id == entity_id),
+            None,
+        )
+        return entity.name if entity else entity_id
+
     for source, targets in transfer_graph.items():
         for target in targets:
             if target in transfer_graph:
@@ -109,7 +116,9 @@ def detect_fraud_patterns(
                             "type": "MULTI_HOP_TRANSACTION",
                             "description": (
                                 f"Funds may move through multiple accounts: "
-                                f"{source} → {target} → {destination}."
+                                f"{_entity_name(source)} → "
+                                f"{_entity_name(target)} → "
+                                f"{_entity_name(destination)}."
                             ),
                             "severity": "HIGH",
                             "evidence": {
