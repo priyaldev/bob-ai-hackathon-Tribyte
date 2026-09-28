@@ -1112,6 +1112,34 @@ function App() {
 
     try {
       /*
+       * If the uploaded content is a JSON file, parse it
+       * structurally using the frontend analyzer — it understands
+       * the full structured schema (persons, bank_accounts,
+       * transactions, devices, sim_cards, communications, …).
+       *
+       * For free-text / paste input, or CSV files, send the raw
+       * text to the FastAPI backend NLP pipeline.
+       */
+      const isJsonUpload =
+        investigationData.input_type === "file" &&
+        investigationData.file_name?.toLowerCase().endsWith(".json");
+
+      if (isJsonUpload) {
+        /*
+         * Route JSON file through the structured frontend analyzer.
+         */
+        const generatedCase = analyzeUploadedInvestigation(
+          investigationData.raw_data,
+          investigationData.case_title,
+          investigationData.context
+        );
+
+        setCurrentCase(generatedCase);
+        setPage("investigation");
+        return;
+      }
+
+      /*
        * POST the raw text to the FastAPI backend.
        * The Vite dev proxy forwards /api → localhost:8000.
        */

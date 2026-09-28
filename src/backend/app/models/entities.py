@@ -6,4 +6,6 @@ class Entity(BaseModel):
     id: str
     name: str
     type: str
+    role: Optional[str] = None
+    description: Optional[str] = None
     metadata: Optional[Dict[str, Any]] = Field(default_factory=dict)

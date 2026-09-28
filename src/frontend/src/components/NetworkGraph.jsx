@@ -57,6 +57,23 @@ function NetworkGraph({
    * ==========================================================
    */
 
+  /*
+   * Prefer the pre-shaped graph payload from the backend
+   * (caseData.graph.nodes / caseData.graph.edges) when it is
+   * present.  The frontend-only path (analyzeUploadedInvestigation
+   * and the mock case) does not produce a graph field, so we fall
+   * back to caseData.entities / caseData.relationships in that case.
+   */
+  const graphNodes =
+    caseData.graph?.nodes?.length
+      ? caseData.graph.nodes
+      : caseData.entities;
+
+  const graphEdges =
+    caseData.graph?.edges?.length
+      ? caseData.graph.edges
+      : caseData.relationships;
+
   const nodes = useMemo(() => {
 
     const columns = 4;
@@ -65,7 +82,7 @@ function NetworkGraph({
 
     const verticalGap = 170;
 
-    return caseData.entities.map(
+    return graphNodes.map(
       (entity, index) => {
 
         const column =
@@ -93,12 +110,16 @@ function NetworkGraph({
                 verticalGap,
           },
 
-          data: entity,
+          // graph.nodes uses "label"; entities uses "name"
+          data: {
+            ...entity,
+            name: entity.name ?? entity.label,
+          },
         };
       }
     );
 
-  }, [caseData.entities]);
+  }, [graphNodes]);
 
   /*
    * ==========================================================
@@ -108,7 +129,7 @@ function NetworkGraph({
 
   const edges = useMemo(
     () =>
-      caseData.relationships.map(
+      graphEdges.map(
         (
           relationship,
           index
@@ -128,7 +149,7 @@ function NetworkGraph({
         })
       ),
 
-    [caseData.relationships]
+    [graphEdges]
   );
 
   /*
@@ -155,20 +176,21 @@ function NetworkGraph({
       (_, node) => {
 
         const entity =
-          caseData.entities.find(
+          graphNodes.find(
             (item) =>
               item.id === node.id
           );
 
         if (entity) {
           onEntitySelect(
-            entity
+            // Normalise label→name so EntityDetails always gets entity.name
+            { ...entity, name: entity.name ?? entity.label }
           );
         }
 
       },
       [
-        caseData.entities,
+        graphNodes,
         onEntitySelect,
       ]
     );

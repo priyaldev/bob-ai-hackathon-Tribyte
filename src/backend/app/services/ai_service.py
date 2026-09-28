@@ -141,11 +141,26 @@ def _extract_entities_mock(text: str) -> List[Entity]:
 
         seen.add(key)
 
+        # Derive a human-readable role label and description for the UI
+        _role_labels = {
+            "PERSON": "Person of Interest",
+            "VICTIM": "Victim",
+            "PHONE": "Phone Number",
+            "DEVICE": "Device",
+            "BANK_ACCOUNT": "Bank Account",
+            "UPI_ID": "UPI ID",
+            "TRANSACTION": "Transaction Reference",
+        }
+        role = _role_labels.get(entity_type, entity_type)
+        description = f"{role} identified in the investigation notes."
+
         entities.append(
             Entity(
                 id=_entity_id(len(entities) + 1),
                 name=name,
                 type=entity_type,
+                role=role,
+                description=description,
                 metadata=metadata or {},
             )
         )
@@ -164,6 +179,19 @@ def _extract_entities_mock(text: str) -> List[Entity]:
     # --------------------------------------------------------
 
     account_numbers: set = set()
+
+    # Form 3 – arrow-notation transfer lines: "3344556677 -> 5566778899 : 90000"
+    # Both the left-hand and right-hand numbers are bank accounts.
+    # This must run BEFORE the phone extractor so those numbers are
+    # registered in account_numbers and are not misclassified as phones.
+    arrow_transfer_pattern = (
+        r"\b(\d{7,18})\s*[-=]>\s*(\d{7,18})\s*[:|]\s*[\d,]+"
+    )
+    for m in re.finditer(arrow_transfer_pattern, text):
+        for num in (m.group(1), m.group(2)):
+            if num not in account_numbers:
+                account_numbers.add(num)
+                add_entity(num, "BANK_ACCOUNT")
 
     # Form 1 – explicitly-prefixed tokens: ACC10001, ACC-9999, ACCOUNT_5678
     # Separator is [-_] only (no space) so "account 4587123690" is handled
@@ -353,6 +381,17 @@ def _extract_entities_mock(text: str) -> List[Entity]:
             r"linked to)\s+"
             r"([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)"
         ),
+        # Strategy 4 – person as the grammatical subject of a financial verb
+        # "Rajesh Patel transferred …", "Priya sent …", "Kumar paid …"
+        (
+            r"([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)"
+            r"\s+(?:transferred|sent|paid|deposited|credited|received)"
+        ),
+        # Strategy 5 – "filed by <Name>", "complaint filed by <Name>"
+        (
+            r"\bfiled\s+by\s+"
+            r"([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)"
+        ),
     ]
 
     for person_pattern in person_patterns:
@@ -470,6 +509,105 @@ def _extract_relationships(
                 timestamp=timestamp,
             )
         )
+
+    # --------------------------------------------------------
+    # Arrow-notation transfers  (pre-pass, before sentence loop)
+    #
+    # Handles lines like:
+    #   3344556677 -> 5566778899 : 90000
+    #   3344556677 -> 5566778899 = 90000
+    # Both endpoints must already be registered as BANK_ACCOUNT
+    # entities (guaranteed by the entity extractor's Form 3 pass).
+    # --------------------------------------------------------
+
+    arrow_rel_pattern = (
+        r"\b(\d{7,18})\s*[-=]>\s*(\d{7,18})\s*[:|]\s*([\d,]+(?:\.\d+)?)"
+    )
+    for m in re.finditer(arrow_rel_pattern, text):
+        src_num, tgt_num, amt_str = m.group(1), m.group(2), m.group(3)
+        src_ent = next((e for e in entities if e.name == src_num and e.type == "BANK_ACCOUNT"), None)
+        tgt_ent = next((e for e in entities if e.name == tgt_num and e.type == "BANK_ACCOUNT"), None)
+        if src_ent and tgt_ent:
+            try:
+                amt_val: Optional[float] = float(amt_str.replace(",", ""))
+            except ValueError:
+                amt_val = None
+            add_relationship(src_ent, tgt_ent, "TRANSFERRED_TO", amount=amt_val)
+
+    # --------------------------------------------------------
+    # Multi-line transaction block parser  (pre-pass)
+    #
+    # Handles blocks like:
+    #   Txn ref TXN90871
+    #   From: Anjali's account      ← or "From: Anjali Gupta"
+    #   To: 3344556677
+    #   Amount: 75000
+    #   Time: 11:42
+    #
+    # We scan a 6-line window: look for a "To: <account>" line,
+    # then search the preceding lines for a "From: <name/account>"
+    # and a numeric amount on any nearby line.
+    # --------------------------------------------------------
+
+    lines = text.splitlines()
+    for line_idx, line in enumerate(lines):
+        to_m = re.match(r"^\s*[Tt]o\s*:\s*(\d{7,18})", line)
+        if not to_m:
+            continue
+        tgt_num = to_m.group(1)
+        tgt_ent = next((e for e in entities if e.name == tgt_num and e.type == "BANK_ACCOUNT"), None)
+        if not tgt_ent:
+            continue
+
+        # Look in the 5 lines before for "From: <something>"
+        window_start = max(0, line_idx - 5)
+        window = lines[window_start:line_idx]
+
+        from_ent: Optional[Entity] = None
+        for wline in window:
+            from_m = re.match(r"^\s*[Ff]rom\s*:\s*(.+)", wline)
+            if not from_m:
+                continue
+            # Strip possessive + "account" suffix ("Anjali's account" -> "Anjali")
+            raw_from = re.sub(
+                r"['\u2019]s\s+account\b", "", from_m.group(1).strip(),
+                flags=re.IGNORECASE,
+            ).strip()
+            raw_from_lower = raw_from.lower()
+            # Try to match against known entities by name.
+            # Check both directions:
+            #   "Anjali Gupta" in "Anjali Gupta"  (full name in text)
+            #   "Anjali" in "Anjali Gupta"         (first-name abbreviated)
+            for e in entities:
+                if e.type not in ("PERSON", "VICTIM", "BANK_ACCOUNT"):
+                    continue
+                ename_lower = e.name.lower()
+                first_token = ename_lower.split()[0]
+                if (
+                    ename_lower in raw_from_lower        # full name in text
+                    or raw_from_lower in ename_lower     # text is prefix of name
+                    or first_token == raw_from_lower     # first name only
+                ):
+                    from_ent = e
+                    break
+            if from_ent:
+                break
+
+        if not from_ent:
+            continue
+
+        # Look for "Amount: <number>" in the same window (after "From")
+        block_lines = lines[window_start: line_idx + 3]
+        block_text = " ".join(block_lines)
+        amt_m = re.search(r"[Aa]mount\s*:\s*([\d,]+(?:\.\d+)?)", block_text)
+        block_amount: Optional[float] = None
+        if amt_m:
+            try:
+                block_amount = float(amt_m.group(1).replace(",", ""))
+            except ValueError:
+                pass
+
+        add_relationship(from_ent, tgt_ent, "TRANSFERRED_TO", amount=block_amount)
 
     # --------------------------------------------------------
     # Split text into sentences
@@ -591,14 +729,18 @@ def _extract_relationships(
                     add_relationship(actor, device, "USES")
 
         # ----------------------------------------------------
-        # DEVICE -> BANK ACCOUNT  (ACCESSES)
+        # DEVICE -> BANK ACCOUNT  (USES)
         # Sentence like: "device DEV-1024 was used to access
         # both account X and account Y"
+        # Also handles: "observed during login activity for"
         # ----------------------------------------------------
 
         if any(
             keyword in sentence_lower
-            for keyword in ["access", "accesses", "accessed"]
+            for keyword in [
+                "access", "accesses", "accessed",
+                "login activity", "observed during",
+            ]
         ):
 
             devices = [
@@ -614,7 +756,7 @@ def _extract_relationships(
             for device in devices:
                 for account in accounts:
                     add_relationship(
-                        device, account, "ASSOCIATED_WITH"
+                        device, account, "USES"
                     )
 
         # ----------------------------------------------------
@@ -807,9 +949,16 @@ class WatsonxAdapter:
                 f"Could not initialise watsonx adapter: {exc}"
             ) from exc
 
-    def complete(self, prompt: str) -> str:
+    def complete(self, messages: list) -> str:
         """
-        Send *prompt* to the model and return the generated text.
+        Send *messages* to the model via the chat API and return the
+        generated text.
+
+        Parameters
+        ----------
+        messages:
+            List of ``{"role": ..., "content": ...}`` dicts.  Should contain
+            at minimum a ``system`` message followed by a ``user`` message.
 
         Raises
         ------
@@ -817,19 +966,19 @@ class WatsonxAdapter:
             On any network or SDK error.
         """
         try:
-            response = self._model.generate_text(
-                prompt=prompt,
+            response = self._model.chat(
+                messages=messages,
                 params={
                     "max_new_tokens": 1024,
                     "temperature": 0.0,
                     "repetition_penalty": 1.05,
                 },
             )
-            return cast(str, response)  # ModelInference.generate_text returns str
+            return cast(str, response["choices"][0]["message"]["content"])
 
         except Exception as exc:
             raise WatsonxUnavailableError(
-                f"watsonx generate_text failed: {exc}"
+                f"watsonx chat failed: {exc}"
             ) from exc
 
 
@@ -848,41 +997,516 @@ def _get_adapter() -> WatsonxAdapter:
 # Prompt builder
 # ============================================================
 
+# _SYSTEM_MESSAGE = """You are a cyber-fraud intelligence extraction engine.
+# Given an unstructured case description, extract all entities and relationships
+# and return ONLY a single valid JSON object — no prose, no markdown fences.
+
+# ## Entity types
+# PERSON, VICTIM, PHONE, DEVICE, BANK_ACCOUNT, UPI_ID, TRANSACTION
+
+# ## Relationship types
+# USES, BELONGS_TO, TRANSFERRED_TO, ASSOCIATED_WITH
+
+# ## Rules
+# 1. Every entity must have: id (E001, E002 …), name, type, metadata (object, may be empty).
+# 2. Every relationship must have: source (entity id), target (entity id), type.
+#    Optional fields: amount (float, INR), timestamp (ISO-8601 or DD/MM/YYYY).
+# 3. Resolve pronouns: replace "He"/"She"/"They" with the unambiguous antecedent's name.
+# 4. Deduplicate: same name (case-insensitive) + same type → use one entity with one id.
+# 5. Drop relationships whose source or target id does not appear in the entities list.
+# 6. Ignore unknown entity and relationship types.
+
+# ## Example input
+# Accused Rahul uses phone 9876543210. He uses device DEV99. Victim Priya transferred Rs 5000 to ACC001 on 2026-01-15.
+
+# ## Example output
+# {
+#   "entities": [
+#     {"id": "E001", "name": "Rahul", "type": "PERSON", "metadata": {}},
+#     {"id": "E002", "name": "9876543210", "type": "PHONE", "metadata": {"country": "IN"}},
+#     {"id": "E003", "name": "DEV99", "type": "DEVICE", "metadata": {}},
+#     {"id": "E004", "name": "Priya", "type": "VICTIM", "metadata": {"role": "victim"}},
+#     {"id": "E005", "name": "ACC001", "type": "BANK_ACCOUNT", "metadata": {}}
+#   ],
+#   "relationships": [
+#     {"source": "E001", "target": "E002", "type": "USES"},
+#     {"source": "E001", "target": "E003", "type": "USES"},
+#     {"source": "E004", "target": "E005", "type": "TRANSFERRED_TO", "amount": 5000.0, "timestamp": "2026-01-15"}
+#   ]
+# }
+# """
 _SYSTEM_MESSAGE = """You are a cyber-fraud intelligence extraction engine.
-Given an unstructured case description, extract all entities and relationships
-and return ONLY a single valid JSON object — no prose, no markdown fences.
 
-## Entity types
-PERSON, VICTIM, PHONE, DEVICE, BANK_ACCOUNT, UPI_ID, TRANSACTION
+Your task is to convert unstructured cyber-fraud investigation notes into a
+structured graph of entities and relationships.
 
-## Relationship types
-USES, BELONGS_TO, TRANSFERRED_TO, ASSOCIATED_WITH
+Return ONLY one valid JSON object.
+Do NOT return markdown.
+Do NOT return explanations.
+Do NOT return ```json fences.
 
-## Rules
-1. Every entity must have: id (E001, E002 …), name, type, metadata (object, may be empty).
-2. Every relationship must have: source (entity id), target (entity id), type.
-   Optional fields: amount (float, INR), timestamp (ISO-8601 or DD/MM/YYYY).
-3. Resolve pronouns: replace "He"/"She"/"They" with the unambiguous antecedent's name.
-4. Deduplicate: same name (case-insensitive) + same type → use one entity with one id.
-5. Drop relationships whose source or target id does not appear in the entities list.
-6. Ignore unknown entity and relationship types.
+============================================================
+ENTITY TYPES
+============================================================
 
-## Example input
-Accused Rahul uses phone 9876543210. He uses device DEV99. Victim Priya transferred Rs 5000 to ACC001 on 2026-01-15.
+Allowed entity types:
 
-## Example output
+PERSON
+VICTIM
+PHONE
+DEVICE
+BANK_ACCOUNT
+UPI_ID
+TRANSACTION
+
+Rules:
+
+1. Every entity must have:
+   - id
+   - name
+   - type
+   - metadata
+
+2. IDs must be sequential:
+   E001, E002, E003, ...
+
+3. Deduplicate entities:
+   Same real-world entity must receive only ONE entity ID.
+
+4. Preserve complete names.
+
+   Example:
+   "Suresh Yadav" must be extracted as:
+
+   {
+     "name": "Suresh Yadav",
+     "type": "PERSON"
+   }
+
+   Do NOT shorten it to "Suresh" if the full name is available.
+
+5. A person mentioned by first name later should resolve to the previously
+   identified full name when the context is unambiguous.
+
+   Example:
+   "Suresh Yadav..."
+   later:
+   "Mobile number ... is associated with Suresh"
+
+   Resolve "Suresh" to "Suresh Yadav".
+
+============================================================
+TRANSACTION ENTITY RULES
+============================================================
+
+A TRANSACTION entity represents a transaction reference/identifier.
+
+Examples:
+
+TXN90871
+TXN90892
+TRANSACTION-1001
+
+These MUST be represented as TRANSACTION entities.
+
+IMPORTANT:
+
+Amounts are NOT transaction entities.
+
+For example:
+
+Amount: 75000
+
+MUST NOT create:
+
+{
+  "type": "TRANSACTION",
+  "name": "75000"
+}
+
+Instead, 75000 must be stored as the "amount" property of the
+corresponding TRANSFERRED_TO relationship.
+
+Therefore:
+
+"Transaction reference TXN90871"
+"Amount 75000"
+
+means:
+
+TRANSACTION = TXN90871
+amount = 75000
+
+============================================================
+BANK ACCOUNT VS PHONE
+============================================================
+
+A numeric value may represent either a PHONE or BANK_ACCOUNT.
+
+Use contextual evidence.
+
+Phone examples:
+
+9123456780
+9876543210
+
+Bank account examples:
+
+3344556677
+5566778899
+4587123690
+
+IMPORTANT:
+
+If a number appears in an account-transfer expression:
+
+3344556677 -> 5566778899 : 90000
+
+then BOTH numbers MUST be treated as BANK_ACCOUNT entities,
+not PHONE entities.
+
+Likewise:
+
+5566778899 -> 7788990011 : 85000
+
+means all three numbers are BANK_ACCOUNT entities when they occur
+in this transaction-chain context.
+
+Do not classify an account number as PHONE merely because it has
+10 digits.
+
+============================================================
+TRANSACTION BLOCKS
+============================================================
+
+Investigation notes may describe one transaction across multiple lines.
+
+For example:
+
+Txn ref TXN90871
+From: Anjali's account
+To: 3344556677
+Amount: 75000
+Time: 11:42
+
+These lines represent ONE transaction event.
+
+Interpret them together as:
+
+transaction_id = TXN90871
+source = Anjali Gupta
+target = 3344556677
+amount = 75000
+timestamp = 11:42
+
+If "Anjali's account" clearly refers to Anjali Gupta's account,
+the TRANSFERRED_TO relationship must originate from Anjali Gupta.
+
+DO NOT treat the amount as an entity.
+
+DO NOT treat the transaction ID as the source of the money.
+
+Correct:
+
+Anjali Gupta -> TRANSFERRED_TO -> 3344556677
+amount = 75000
+timestamp = 11:42
+
+Incorrect:
+
+TXN90871 -> TRANSFERRED_TO -> 3344556677
+
+============================================================
+ACCOUNT-TO-ACCOUNT TRANSFERS
+============================================================
+
+The following notation represents a financial transfer:
+
+3344556677 -> 5566778899 : 90000
+
+Interpret it as:
+
+3344556677 -> TRANSFERRED_TO -> 5566778899
+amount = 90000
+
+Another example:
+
+5566778899 -> 7788990011 : 85000
+
+Interpret it as:
+
+5566778899 -> TRANSFERRED_TO -> 7788990011
+amount = 85000
+
+IMPORTANT:
+
+The source and target MUST be the BANK_ACCOUNT entities.
+
+Do NOT use the TRANSACTION entity as the source or target.
+
+============================================================
+TRANSACTION REFERENCES
+============================================================
+
+Transaction references provide identifying information about a
+transaction but are not normally the source or target of the
+TRANSFERRED_TO relationship.
+
+Example:
+
+Txn ref TXN90871
+From: Anjali Gupta
+To: 3344556677
+Amount: 75000
+
+Create:
+
+TRANSACTION entity:
+TXN90871
+
+AND:
+
+Anjali Gupta -> TRANSFERRED_TO -> 3344556677
+
+with:
+
+amount = 75000
+
+timestamp = appropriate timestamp if available.
+
+Do NOT create:
+
+TXN90871 -> TRANSFERRED_TO -> 3344556677
+
+unless the input explicitly states that the transaction entity
+itself participates in a relationship.
+
+============================================================
+PEOPLE AND ACCOUNTS
+============================================================
+
+If the text says:
+
+"Account 3344556677 is operated by Suresh Yadav."
+
+create:
+
+Suresh Yadav -> ASSOCIATED_WITH -> 3344556677
+
+If the text says:
+
+"Account 5566778899 is associated with Pankaj Kumar."
+
+create:
+
+Pankaj Kumar -> ASSOCIATED_WITH -> 5566778899
+
+Do not infer ownership when the text only says "associated with",
+"reported", "appears connected", or similar uncertain language.
+
+Preserve the evidence rather than inventing facts.
+
+============================================================
+PHONE RELATIONSHIPS
+============================================================
+
+If the text says:
+
+"Mobile number 9123456780 is associated with Suresh."
+
+and Suresh clearly refers to Suresh Yadav:
+
+Suresh Yadav -> ASSOCIATED_WITH -> 9123456780
+
+If the text says:
+
+"Phone number 9876543210 is associated with Rahul."
+
+and Rahul clearly refers to Rahul Mehta:
+
+Rahul Mehta -> ASSOCIATED_WITH -> 9876543210
+
+============================================================
+DEVICE RELATIONSHIPS
+============================================================
+
+If the text says:
+
+"Device DEV-4455 was observed during login activity for 3344556677."
+
+create:
+
+DEV-4455 -> USES -> 3344556677
+
+If the same device was used to access multiple accounts:
+
+DEV-4455 -> USES -> Account A
+DEV-4455 -> USES -> Account B
+
+Do not merge the two accounts.
+
+============================================================
+TIMESTAMPS
+============================================================
+
+Preserve explicit timestamps.
+
+Examples:
+
+11:42
+11:35 AM
+2026-09-20
+20/09/2026
+
+If only a time is provided, use the time as provided.
+
+Do not invent a date.
+
+If an exact date and time are available, normalize them to ISO-8601
+when possible.
+
+============================================================
+AMOUNTS
+============================================================
+
+Extract INR amounts as numeric values.
+
+Examples:
+
+Rs 75,000 -> 75000.0
+₹32,000 -> 32000.0
+Amount 46000 -> 46000.0
+
+Amounts belong on TRANSFERRED_TO relationships.
+
+Do NOT create entities from amounts.
+
+============================================================
+PRONOUNS AND REFERENCES
+============================================================
+
+Resolve pronouns when the antecedent is unambiguous.
+
+Example:
+
+"Rahul uses phone 9876543210. He also uses device DEV123."
+
+"He" = Rahul.
+
+Resolve shortened references when unambiguous.
+
+Example:
+
+"Suresh Yadav is associated with account 3344556677.
+The mobile number is associated with Suresh."
+
+"Suresh" = Suresh Yadav.
+
+============================================================
+UNCERTAINTY
+============================================================
+
+Do not convert allegations or investigation leads into confirmed facts.
+
+Examples:
+
+"reportedly operated by"
+"appears to be connected to"
+"preliminary records"
+"may have been used"
+"indications suggest"
+
+must not cause the person to be labeled as a confirmed offender.
+
+The entity should remain PERSON unless the text explicitly identifies
+the person as a victim or another supported entity type.
+
+============================================================
+RELATIONSHIP TYPES
+============================================================
+
+Allowed relationship types:
+
+USES
+BELONGS_TO
+TRANSFERRED_TO
+ASSOCIATED_WITH
+
+Every relationship must have:
+
+source
+target
+type
+
+Optional:
+
+amount
+timestamp
+
+The source and target MUST be valid entity IDs.
+
+============================================================
+DEDUPLICATION
+============================================================
+
+Do not create duplicate entities.
+
+For example:
+
+"Suresh Yadav"
+"Suresh"
+
+should resolve to the same PERSON when context makes the reference
+unambiguous.
+
+Likewise:
+
+"3344556677"
+"account 3344556677"
+
+refer to the same BANK_ACCOUNT.
+
+============================================================
+IMPORTANT FINAL VALIDATION
+============================================================
+
+Before returning the JSON, verify:
+
+1. Every entity has id, name, type and metadata.
+2. Every entity type is allowed.
+3. Every relationship source exists.
+4. Every relationship target exists.
+5. No amount is represented as a TRANSACTION entity.
+6. Transaction references such as TXN90871 remain intact.
+7. Account-to-account arrow transfers use BANK_ACCOUNT entities.
+8. Full person names are preserved.
+9. Duplicate entities are merged.
+10. Do not invent relationships that are not supported by the text.
+11. Do not identify a person as a confirmed offender unless explicitly
+    supported by the input.
+12. Return ONLY valid JSON.
+
+============================================================
+OUTPUT FORMAT
+============================================================
+
 {
   "entities": [
-    {"id": "E001", "name": "Rahul", "type": "PERSON", "metadata": {}},
-    {"id": "E002", "name": "9876543210", "type": "PHONE", "metadata": {"country": "IN"}},
-    {"id": "E003", "name": "DEV99", "type": "DEVICE", "metadata": {}},
-    {"id": "E004", "name": "Priya", "type": "VICTIM", "metadata": {"role": "victim"}},
-    {"id": "E005", "name": "ACC001", "type": "BANK_ACCOUNT", "metadata": {}}
+    {
+      "id": "E001",
+      "name": "entity name",
+      "type": "ENTITY_TYPE",
+      "metadata": {}
+    }
   ],
   "relationships": [
-    {"source": "E001", "target": "E002", "type": "USES"},
-    {"source": "E001", "target": "E003", "type": "USES"},
-    {"source": "E004", "target": "E005", "type": "TRANSFERRED_TO", "amount": 5000.0, "timestamp": "2026-01-15"}
+    {
+      "source": "E001",
+      "target": "E002",
+      "type": "RELATIONSHIP_TYPE",
+      "amount": 75000.0,
+      "timestamp": "11:42"
+    }
   ]
 }
 """
@@ -894,6 +1518,18 @@ def _build_prompt(text: str) -> str:
         f"## Case text\n{text.strip()}\n\n"
         f"## Output (JSON only)\n"
     )
+
+
+def _build_messages(text: str) -> list:
+    """Return a chat-API messages list with separate system and user roles."""
+    user_content = (
+        f"## Case text\n{text.strip()}\n\n"
+        f"## Output (JSON only)\n"
+    )
+    return [
+        {"role": "system", "content": _SYSTEM_MESSAGE},
+        {"role": "user", "content": user_content},
+    ]
 
 
 # ============================================================
@@ -954,11 +1590,25 @@ def _parse_llm_response(raw: str, fallback_text: str) -> CaseAnalysis:
             new_id = _entity_id(len(entities) + 1)
             id_map[str(raw_ent.get("id", ""))] = new_id
 
+            _role_labels = {
+                "PERSON": "Person of Interest",
+                "VICTIM": "Victim",
+                "PHONE": "Phone Number",
+                "DEVICE": "Device",
+                "BANK_ACCOUNT": "Bank Account",
+                "UPI_ID": "UPI ID",
+                "TRANSACTION": "Transaction Reference",
+            }
+            role = _role_labels.get(etype, etype)
+            description = f"{role} identified in the investigation notes."
+
             entities.append(
                 Entity(
                     id=new_id,
                     name=name,
                     type=etype,
+                    role=role,
+                    description=description,
                     metadata=raw_ent.get("metadata") or {},
                 )
             )
@@ -1035,8 +1685,8 @@ def _parse_llm_response(raw: str, fallback_text: str) -> CaseAnalysis:
 
 def _watsonx_analysis(text: str) -> CaseAnalysis:
     try:
-        prompt = _build_prompt(text)
-        raw = _get_adapter().complete(prompt)
+        messages = _build_messages(text)
+        raw = _get_adapter().complete(messages)
         return _parse_llm_response(raw, text)
     except WatsonxUnavailableError:
         logger.warning("watsonx unavailable – using deterministic fallback")
