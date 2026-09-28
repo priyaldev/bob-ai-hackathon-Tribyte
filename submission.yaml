@@ -9,51 +9,64 @@
 # =============================================================================
 
 team:
-  name: ""                             # REQUIRED — e.g., "Orion Squad"
-  track: ""                            # REQUIRED — one of: AI | DevOps | Sustainability | Open
+  name: "TriByte"                      # REQUIRED — e.g., "Orion Squad"
+  track: "AI"                          # REQUIRED — one of: AI | DevOps | Sustainability | Open
   lead:
-    name: ""                           # REQUIRED — e.g., "Alice Chen"
-    email: ""                          # REQUIRED — e.g., "alice.chen@ibm.com"
+    name: "Priyal Jain"                # REQUIRED — e.g., "Alice Chen"
+    email: "jainpriyal048@gmail.com"   # REQUIRED — e.g., "alice.chen@ibm.com"
   members:
-    - name: ""                         # REQUIRED — Team member 1
+    - name: "Priyal Jain"              # REQUIRED — Team member 1
+      email: "jainpriyal048@gmail.com"
+    - name: "Aakriti Ghimire"          # Add more members by copying the two lines above
       email: ""
-    - name: ""                         # Add more members by copying the two lines above
-      email: ""
-    - name: ""
+    - name: "Khushi Ganatra"
       email: ""
 
 submission:
-  title: ""                            # REQUIRED — Project display name, e.g., "SmartOps Dashboard"
+  title: "Cyber Fraud Network Analyzer"  # REQUIRED — Project display name
 
   problem_statement: >                 # REQUIRED — 1-3 sentences. What problem? Who has it?
-    Replace this text with a concise description of the real-world problem
-    your project addresses and who experiences it.
+    Cybercrime investigators in India face 95,000+ UPI fraud cases annually
+    with no tools to connect fragmented data — transaction records, call logs,
+    phone numbers, SIM cards, and devices. Manual investigation takes weeks,
+    and missed relationships mean missed leads, leaving most cases unsolved.
 
   solution_summary: >                  # REQUIRED — 1-3 sentences. What did you build?
-    Replace this text with a clear description of your solution
-    and how it addresses the problem above.
+    Cyber Fraud Network Analyzer is an AI-powered investigation-support platform
+    that ingests raw, unstructured case notes and automatically extracts entities,
+    maps relationships, detects fraud patterns, and renders an interactive network
+    graph — delivering a FIR-ready case brief in seconds instead of weeks.
 
   key_features:                        # REQUIRED — List 3 to 5 specific features you implemented
-    - ""                               # e.g., "Real-time pipeline anomaly detection using watsonx.ai"
-    - ""
-    - ""
-    - ""                               # optional 4th
-    - ""                               # optional 5th
+    - "Entity extraction of 7 types (Person, Victim, Phone, Device, Bank Account, UPI ID, Transaction) from unstructured text"
+    - "Automated fraud pattern detection: MULTIPLE_SOURCE_TRANSACTIONS, SHARED_DEVICE, and MULTI_HOP_TRANSACTION with severity levels"
+    - "Interactive network graph visualization using React Flow with drag, zoom, and click-to-detail"
+    - "IBM watsonx.ai (Granite-13B) runtime AI extraction with deterministic regex fallback for offline reliability"
+    - "FIR-ready investigation brief with entity counts, detected patterns, key entities, and recommended investigative actions"
 
   tech_stack:
-    languages: []                      # REQUIRED — e.g., ["Python", "TypeScript"]
-    frameworks: []                     # e.g., ["FastAPI", "React"]
-    ibm_technologies: []               # e.g., ["watsonx.ai", "IBM Bob", "IBM Cloud Functions"]
-    databases: []                      # e.g., ["PostgreSQL", "Redis"]
-    other: []                          # e.g., ["Docker", "GitHub Actions", "Slack API"]
+    languages: ["Python", "JavaScript"]
+    frameworks: ["FastAPI", "React", "Vite", "React Flow", "Pydantic", "pytest"]
+    ibm_technologies: ["IBM Bob", "IBM watsonx.ai"]
+    other: ["Uvicorn", "Axios", "Lucide React", "GitHub Actions"]
 
   what_we_are_most_proud_of: >         # Optional but recommended — guides judges to your best work
-    Replace with what aspect of the submission you consider strongest
-    and want judges to pay special attention to.
+    We are most proud of the end-to-end pipeline that transforms messy,
+    unstructured investigation notes into a structured fraud network graph
+    and FIR-ready brief in seconds — a workflow that previously took investigators
+    weeks. The deterministic fallback ensures the tool works reliably without
+    any external AI service, while IBM watsonx.ai provides enhanced accuracy
+    when available. IBM Bob was instrumental as our primary development agent,
+    enabling rapid architecture decisions, service implementation, and testing.
 
   known_limitations: >                 # Optional but recommended — be honest about gaps
-    Replace with any known limitations, incomplete features,
-    or shortcuts taken due to time constraints.
+    The system is a prototype using synthetic demo data; it does not connect
+    to real banking or law-enforcement databases. Entity extraction accuracy
+    depends on the quality of input text and regex pattern coverage. No
+    authentication, authorization, or audit logging is implemented (not
+    production-ready). The watsonx.ai integration requires valid API credentials
+    and is currently optional. Mobile responsiveness is limited (optimized for
+    desktop/tablet).
 
 # =============================================================================
 # ARTIFACT LOCATIONS
