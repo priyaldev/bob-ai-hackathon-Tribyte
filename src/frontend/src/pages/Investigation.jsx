@@ -12,6 +12,7 @@ import {
 import NetworkGraph from "../components/NetworkGraph";
 import EntityDetails from "../components/EntityDetails";
 import FraudAnalysis from "../components/FraudAnalysis";
+import CaseBrief from "../components/CaseBrief";
 
 function Investigation({
   caseData,
@@ -19,6 +20,9 @@ function Investigation({
 }) {
   const [selectedEntity, setSelectedEntity] =
     useState(null);
+
+  const [showBrief, setShowBrief] =
+    useState(false);
 
   const people =
     caseData.entities.filter(
@@ -39,6 +43,7 @@ function Investigation({
     ).length;
 
   return (
+    <>
     <div className="investigation-page">
 
       {/* =====================================================
@@ -250,7 +255,10 @@ function Investigation({
 
         </div>
 
-        <button className="primary-button">
+        <button
+          className="primary-button"
+          onClick={() => setShowBrief(true)}
+        >
 
           <FileText
             size={18}
@@ -263,6 +271,15 @@ function Investigation({
       </div>
 
     </div>
+
+    {showBrief && (
+      <CaseBrief
+        caseData={caseData}
+        onClose={() => setShowBrief(false)}
+      />
+    )}
+
+    </>
   );
 }
 

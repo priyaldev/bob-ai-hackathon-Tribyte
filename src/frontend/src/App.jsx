@@ -1107,28 +1107,41 @@ function App() {
        * POST the raw text to the FastAPI backend.
        * The Vite dev proxy forwards /api → localhost:8000.
        */
-      const response = await fetch(
-        "/api/cases/analyze",
-        {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({
-            text: investigationData.raw_data,
-          }),
-        }
-      );
+      let response;
+      try {
+        response = await fetch(
+          "/api/cases/analyze",
+          {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({
+              text: investigationData.raw_data,
+            }),
+          }
+        );
+      } catch {
+        throw new Error(
+          "Cannot reach the backend. Make sure the FastAPI server is running on port 8000."
+        );
+      }
 
       if (!response.ok) {
         const errorData = await response
           .json()
           .catch(() => ({}));
 
-        throw new Error(
-          errorData?.detail ||
-            `Server error: ${response.status}`
-        );
+        // FastAPI validation errors return detail as an array of objects
+        const detail = errorData?.detail;
+        const message =
+          typeof detail === "string"
+            ? detail
+            : Array.isArray(detail)
+            ? detail.map((d) => d.msg || String(d)).join("; ")
+            : `Server error: ${response.status}`;
+
+        throw new Error(message);
       }
 
       const apiCase = await response.json();
