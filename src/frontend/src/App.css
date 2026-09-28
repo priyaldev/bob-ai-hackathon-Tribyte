@@ -155,6 +155,18 @@
   font-weight: 800;
 }
 
+.risk-badge.risk-medium {
+  background: rgba(245, 166, 35, 0.12);
+  color: #f5a623;
+  border-color: rgba(245, 166, 35, 0.25);
+}
+
+.risk-badge.risk-low {
+  background: rgba(111, 191, 115, 0.12);
+  color: #6fbf73;
+  border-color: rgba(111, 191, 115, 0.25);
+}
+
 /* Investigation */
 
 .investigation-page {

@@ -1,49 +1,85 @@
 # Architecture
 
-## System Architecture
-
-[Describe the overall architecture of your system. Replace the Mermaid diagram below with your actual architecture.]
-
 ```mermaid
 graph TD
-    A[User / Browser] -->|HTTP| B[Frontend - React]
-    B -->|REST API| C[Backend - FastAPI]
-    C -->|SDK| D[watsonx.ai]
-    C -->|Query| E[PostgreSQL]
-    C -->|Publish| F[Slack Webhook]
-    D -->|Inference Result| C
+A[Investigator] -->|Case text / File upload| B[Frontend - React + Vite]
+B -->|POST /api/cases/analyze| C[Backend API - Python + FastAPI]
+C --> D[Input Processing & Normalization]
+D --> E[AI / Extraction Service]
+E -->|SDK| F[IBM watsonx.ai]
+F -->|Entities & Relationships| E
+E --> G[Entity Model - Pydantic]
+E --> H[Relationship Model - Pydantic]
+G --> I[Fraud Pattern Detection]
+H --> I
+G --> J[Graph Service]
+H --> J
+I --> K[Report Service]
+J --> K
+K --> L[Case Analysis Response]
+L --> B
+B --> M[Investigation Dashboard]
+M --> M1[Case Overview]
+M --> M2[Entities & Relationships]
+M --> M3[Fraud Patterns]
+M --> M4[Network Graph]
+M --> M5[Investigation Report]
+M --> M6[FIR-Ready Case Brief]
+N[IBM Bob] -.->|Development & Engineering| C
+N -.->|Development & Engineering| B
+N -.->|Testing & Debugging| E
+N -.->|Code Review & Documentation| K
 ```
 
 ## Components
 
 | Component | Technology | Responsibility |
-|---|---|---|
-| Frontend | [e.g., React 18] | [e.g., Dashboard UI, user interaction] |
-| Backend API | [e.g., FastAPI] | [e.g., Business logic, orchestration] |
-| AI / ML | [e.g., watsonx.ai] | [e.g., Anomaly scoring, classification] |
-| Database | [e.g., PostgreSQL] | [e.g., Storing pipeline events and scores] |
-| Notifications | [e.g., Slack API] | [e.g., Alerting on threshold breaches] |
+|Frontend | React + Vite | Investigation dashboard, case input, file upload, results visualization |
+|Backend API | Python + FastAPI	| API endpoints, request handling, analysis orchestration |
+|AI / Intelligence | IBM watsonx.ai | Extracts entities and relationships from unstructured fraud data |
+|Entity & Relationship Models |	Pydantic |Structures people, victims, accounts, devices, phone numbers, and their relationships |
+|Fraud Pattern Detection | Python | Detects multiple-source transactions, shared devices, and multi-hop transaction patterns |
+|Graph Service | Python + React Flow | Builds and visualizes the fraud network as nodes and relationships |
+|Report Service	| Python | Generates case summaries, key entities, findings, and recommended investigative actions |
+|FIR-Ready Case Brief | Python + React | Presents investigation findings in a structured FIR-ready format |
+|IBM Bob | IBM Bob | Supports development, architecture planning, implementation, debugging, testing, integration, and documentation |
 
 ## Data Flow
 
-[Describe how data moves through your system from input to output.]
+The system transforms unstructured cyber-fraud investigation information into a structured network and investigation report.
 
-1. [e.g., Pipeline logs are ingested via a webhook from GitHub Actions]
-2. [e.g., Logs are preprocessed and chunked into 512-token segments]
-3. [e.g., Each chunk is sent to the watsonx.ai inference endpoint]
-4. [e.g., Anomaly scores are stored in PostgreSQL]
-5. [e.g., The React dashboard polls the API every 30 seconds to refresh]
+- The investigator provides case information through the React + Vite frontend using text or supported case files.
+- The frontend sends the investigation data to the FastAPI backend through the /api/cases/analyze endpoint.
+- The backend processes and normalizes the supplied information into a form suitable for analysis.
+- The AI / extraction service analyzes the investigation data using IBM watsonx.ai and identifies relevant entities and relationships.
+- Extracted information is represented using structured Pydantic entity and relationship models.
+- The fraud pattern detection service analyzes the relationships and identifies potentially suspicious patterns, such as multiple victims or sources connected to the same account, shared device usage, and multi-hop transaction paths.
+- The graph service converts the extracted entities and relationships into graph nodes and edges.
+- The report service generates an investigation summary, key entities, identified patterns, and recommended investigative actions.
+- The backend returns the complete case analysis to the frontend.
+- The frontend displays the results through the investigation dashboard, including the case overview, entities, relationships, fraud patterns, network graph, investigation report, and FIR-ready case brief.
 
 ## Security Considerations
 
-[Note any security decisions relevant to the architecture — even if basic.]
-
-- [e.g., API keys stored in environment variables, never committed to git]
-- [e.g., All API routes require a Bearer token]
-- [e.g., Database credentials rotated via IBM Secrets Manager]
+- Sensitive credentials such as IBM watsonx.ai API keys and project identifiers are stored using environment variables and are not committed to the repository.
+- Secrets and configuration files containing credentials should be excluded through .gitignore.
+- The prototype is designed around synthetic/mock investigation data rather than real personal banking or telecom records.
+- The system does not treat a detected network relationship as proof of criminal activity. Findings are presented as indicators requiring investigation and verification.
+- Person-level roles such as potential intermediary or potential central entity are derived from available network evidence and should not be interpreted as confirmed criminal status.
+- Recommended investigative actions are based only on information identified in the supplied case data; the system should not invent missing evidence.
+- CORS is configured on the FastAPI backend to allow communication with the development frontend.
 
 ## Scalability Notes
 
-[Optional: how would this scale beyond the hackathon prototype?]
+The current implementation is designed as a hackathon prototype with a modular frontend and FastAPI backend. The backend services are separated into AI extraction, fraud-pattern detection, graph generation, and report generation components, allowing individual parts of the pipeline to be extended independently.
 
-[e.g., "The FastAPI backend is stateless and could be horizontally scaled behind a load balancer. The watsonx.ai calls are the bottleneck and would benefit from request batching."]
+For a larger production deployment, the architecture could be extended by:
+
+- Deploying multiple stateless FastAPI instances behind a load balancer.
+- Introducing a persistent database for investigation cases, entities, relationships, and analysis history.
+- Using a graph database for large-scale relationship analysis and complex network queries.
+- Processing large files asynchronously using background workers or a task queue.
+- Adding caching and batching for AI inference requests.
+- Introducing authentication, authorization, audit logging, and centralized secrets management.
+- Scaling the frontend and API independently based on usage.
+- Adding more advanced fraud-detection rules and network-analysis algorithms as additional investigation patterns are identified.

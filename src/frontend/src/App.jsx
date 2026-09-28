@@ -1088,6 +1088,14 @@ function App() {
   const [currentCase, setCurrentCase] =
     useState(mockCase);
 
+  /*
+   * All cases shown in the Recent Cases list.
+   * Seeded with the demo mockCase so the dashboard
+   * is never empty on first load.
+   */
+  const [cases, setCases] =
+    useState([mockCase]);
+
   const [isAnalyzing, setIsAnalyzing] =
     useState(false);
 
@@ -1208,6 +1216,7 @@ function App() {
           apiCase.report?.recommended_actions || [],
       };
 
+      setCases((prev) => [generatedCase, ...prev]);
       setCurrentCase(generatedCase);
       setPage("investigation");
     } finally {
@@ -1269,11 +1278,11 @@ function App() {
         <div>
 
           <span className="eyebrow">
-            INVESTIGATION INTELLIGENCE PLATFORM
+            FRAUD INTELLIGENCE PLATFORM
           </span>
 
           <h1>
-            Cyber Fraud Network Analyzer
+            CyberTrace — Fraud Intelligence
           </h1>
 
           <p>
@@ -1303,11 +1312,11 @@ function App() {
 
         <div>
           <span>
-            ACTIVE CASES
+            TOTAL CASES
           </span>
 
           <strong>
-            12
+            {cases.length}
           </strong>
         </div>
 
@@ -1317,7 +1326,14 @@ function App() {
           </span>
 
           <strong>
-            34
+            {cases.reduce(
+              (sum, c) =>
+                sum +
+                (c.entities || []).filter(
+                  (e) => e.type === "PERSON" || e.type === "VICTIM"
+                ).length,
+              0
+            )}
           </strong>
         </div>
 
@@ -1327,7 +1343,14 @@ function App() {
           </span>
 
           <strong>
-            18
+            {cases.reduce(
+              (sum, c) =>
+                sum +
+                (c.entities || []).filter(
+                  (e) => e.type === "DEVICE"
+                ).length,
+              0
+            )}
           </strong>
         </div>
 
@@ -1337,7 +1360,14 @@ function App() {
           </span>
 
           <strong>
-            27
+            {cases.reduce(
+              (sum, c) =>
+                sum +
+                (c.entities || []).filter(
+                  (e) => e.type === "BANK_ACCOUNT"
+                ).length,
+              0
+            )}
           </strong>
         </div>
 
@@ -1363,48 +1393,53 @@ function App() {
 
         </div>
 
-        <div className="case-card">
+        {cases.map((c) => (
+          <div className="case-card" key={c.case_id}>
 
-          <div>
+            <div>
 
-            <span className="case-id">
-              {mockCase.case_id}
-            </span>
+              <span className="case-id">
+                {c.case_id}
+              </span>
 
-            <h3>
-              {mockCase.case_title}
-            </h3>
+              <h3>
+                {c.case_title}
+              </h3>
 
-            <p>
-              {mockCase.summary}
-            </p>
+              <p>
+                {c.summary}
+              </p>
+
+            </div>
+
+            <div className="case-card-right">
+
+              <span
+                className={`risk-badge${
+                  c.status === "LOW RISK"
+                    ? " risk-low"
+                    : c.status === "MEDIUM RISK"
+                    ? " risk-medium"
+                    : ""
+                }`}
+              >
+                {c.status}
+              </span>
+
+              <button
+                className="secondary-button"
+                onClick={() => {
+                  setCurrentCase(c);
+                  setPage("investigation");
+                }}
+              >
+                Open Investigation →
+              </button>
+
+            </div>
 
           </div>
-
-          <div className="case-card-right">
-
-            <span className="risk-badge">
-              {mockCase.status}
-            </span>
-
-            <button
-              className="secondary-button"
-              onClick={() => {
-                setCurrentCase(
-                  mockCase
-                );
-
-                setPage(
-                  "investigation"
-                );
-              }}
-            >
-              Open Investigation →
-            </button>
-
-          </div>
-
-        </div>
+        ))}
 
       </section>
 

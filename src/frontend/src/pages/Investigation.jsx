@@ -73,7 +73,15 @@ function Investigation({
 
         </div>
 
-        <div className="risk-badge">
+        <div
+          className={`risk-badge${
+            caseData.status === "LOW RISK"
+              ? " risk-low"
+              : caseData.status === "MEDIUM RISK"
+              ? " risk-medium"
+              : ""
+          }`}
+        >
 
           <AlertTriangle
             size={16}
