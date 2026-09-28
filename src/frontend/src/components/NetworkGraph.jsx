@@ -7,7 +7,6 @@ import {
   ReactFlow,
   Background,
   Controls,
-  MiniMap,
   Handle,
   Position,
 } from "@xyflow/react";
@@ -193,8 +192,6 @@ function NetworkGraph({
         <Background />
 
         <Controls />
-
-        <MiniMap />
 
       </ReactFlow>
 
