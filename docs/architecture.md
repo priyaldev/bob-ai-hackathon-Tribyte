@@ -1,11 +1,34 @@
 # Architecture
 
-## System Architecture
-
-[Describe the overall architecture of your system. Replace the Mermaid diagram below with your actual architecture.]
-
 ```mermaid
-graph TD A[Investigator] -->|Case text / File upload| B[Frontend - React + Vite] B -->|POST /api/cases/analyze| C[Backend API - Python + FastAPI] C --> D[Input Processing & Normalization] D --> E[AI / Extraction Service] E -->|SDK| F[IBM watsonx.ai] F -->|Entities & Relationships| E E --> G[Entity Model - Pydantic] E --> H[Relationship Model - Pydantic] G --> I[Fraud Pattern Detection] H --> I G --> J[Graph Service] H --> J I --> K[Report Service] J --> K K --> L[Case Analysis Response] L --> B B --> M[Investigation Dashboard] M --> M1[Case Overview] M --> M2[Entities & Relationships] M --> M3[Fraud Patterns] M --> M4[Network Graph] M --> M5[Investigation Report] M --> M6[FIR-Ready Case Brief] N[IBM Bob] -.->|Development & Engineering| C N -.->|Development & Engineering| B N -.->|Testing & Debugging| E N -.->|Code Review & Documentation| K
+graph TD
+A[Investigator] -->|Case text / File upload| B[Frontend - React + Vite]
+B -->|POST /api/cases/analyze| C[Backend API - Python + FastAPI]
+C --> D[Input Processing & Normalization]
+D --> E[AI / Extraction Service]
+E -->|SDK| F[IBM watsonx.ai]
+F -->|Entities & Relationships| E
+E --> G[Entity Model - Pydantic]
+E --> H[Relationship Model - Pydantic]
+G --> I[Fraud Pattern Detection]
+H --> I
+G --> J[Graph Service]
+H --> J
+I --> K[Report Service]
+J --> K
+K --> L[Case Analysis Response]
+L --> B
+B --> M[Investigation Dashboard]
+M --> M1[Case Overview]
+M --> M2[Entities & Relationships]
+M --> M3[Fraud Patterns]
+M --> M4[Network Graph]
+M --> M5[Investigation Report]
+M --> M6[FIR-Ready Case Brief]
+N[IBM Bob] -.->|Development & Engineering| C
+N -.->|Development & Engineering| B
+N -.->|Testing & Debugging| E
+N -.->|Code Review & Documentation| K
 ```
 
 ## Components
